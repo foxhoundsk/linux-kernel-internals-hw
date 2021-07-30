@@ -272,10 +272,20 @@ static int _hideproc_init(void)
 
 static void _hideproc_exit(void)
 {
+    pid_node_t *proc, *tmp_proc;
+
     device_destroy(hideproc_class, MKDEV(MAJOR(dev), MINOR_VERSION));
     class_destroy(hideproc_class);
     unregister_chrdev_region(MKDEV(MAJOR(dev), MINOR_VERSION), MINOR_VERSION);
     hook_remove(&hook);
+
+    /* in case that there exist concurrent module removal calls */
+    spin_lock(&list_lock);
+    list_for_each_entry_safe (proc, tmp_proc, &hidden_proc, list_node) {
+        list_del(&proc->list_node);
+        kfree(proc);
+    }
+    spin_unlock(&list_lock);
 
     printk(KERN_INFO "@ %s\n", __func__);
 }
