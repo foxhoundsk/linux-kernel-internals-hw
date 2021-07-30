@@ -63,7 +63,7 @@ static int hook_install(struct ftrace_hook *hook)
     return 0;
 }
 
-#if 0
+#if 1
 void hook_remove(struct ftrace_hook *hook)
 {
     int err = unregister_ftrace_function(&hook->ops);
@@ -197,7 +197,7 @@ static ssize_t device_write(struct file *filep,
 
 static struct cdev cdev;
 static struct class *hideproc_class = NULL;
-
+static dev_t dev;
 static const struct file_operations fops = {
     .owner = THIS_MODULE,
     .open = device_open,
@@ -212,7 +212,6 @@ static const struct file_operations fops = {
 static int _hideproc_init(void)
 {
     int err, dev_major;
-    dev_t dev;
     printk(KERN_INFO "@ %s\n", __func__);
     err = alloc_chrdev_region(&dev, 0, MINOR_VERSION, DEVICE_NAME);
     dev_major = MAJOR(dev);
@@ -231,8 +230,12 @@ static int _hideproc_init(void)
 
 static void _hideproc_exit(void)
 {
+    device_destroy(hideproc_class, MKDEV(MAJOR(dev), MINOR_VERSION));
+    class_destroy(hideproc_class);
+    unregister_chrdev_region(MKDEV(MAJOR(dev), MINOR_VERSION), MINOR_VERSION);
+    hook_remove(&hook);
+
     printk(KERN_INFO "@ %s\n", __func__);
-    /* FIXME: ensure the release of all allocated resources */
 }
 
 module_init(_hideproc_init);
