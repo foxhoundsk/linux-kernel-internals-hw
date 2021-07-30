@@ -153,8 +153,12 @@ static int unhide_process(pid_t pid)
 
     spin_lock(&list_lock);
     list_for_each_entry_safe (proc, tmp_proc, &hidden_proc, list_node) {
-        list_del(&proc->list_node);
-        kfree(proc);
+        if (proc->id == pid) {
+            list_del(&proc->list_node);
+            spin_unlock(&list_lock);
+            kfree(proc);
+            return SUCCESS;
+        }
     }
     spin_unlock(&list_lock);
     return SUCCESS;
