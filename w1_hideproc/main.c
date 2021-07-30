@@ -4,6 +4,7 @@
 #include <linux/list.h>
 #include <linux/module.h>
 #include <linux/proc_fs.h>
+#include <linux/spinlock.h> /* remove after lock-free based impl introduced */
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("National Cheng Kung University, Taiwan");
@@ -16,6 +17,8 @@ struct ftrace_hook {
     unsigned long address;
     struct ftrace_ops ops;
 };
+
+spinlock_t list_lock;
 
 static int hook_resolve_addr(struct ftrace_hook *hook)
 {
@@ -88,10 +91,15 @@ static struct ftrace_hook hook;
 static bool is_hidden_proc(pid_t pid)
 {
     pid_node_t *proc, *tmp_proc;
+
+    spin_lock(&list_lock);
     list_for_each_entry_safe (proc, tmp_proc, &hidden_proc, list_node) {
-        if (proc->id == pid)
+        if (proc->id == pid) {
+            spin_unlock(&list_lock);
             return true;
+        }
     }
+    spin_unlock(&list_lock);
     return false;
 }
 
@@ -123,23 +131,32 @@ static int hide_process(pid_t pid, bool hide_parent)
 
             /* turns out `child_reaper` is the parent of the target process */
             proc->id = p->numbers[p->level].ns->child_reaper->pid;
-
+            
+            spin_lock(&list_lock);
             list_add_tail(&proc->list_node, &hidden_proc);
+            spin_unlock(&list_lock);
         }
     }
     proc = kmalloc(sizeof(pid_node_t), GFP_KERNEL);
     proc->id = pid;
+
+    spin_lock(&list_lock);
     list_add_tail(&proc->list_node, &hidden_proc);
+    spin_unlock(&list_lock);
+
     return SUCCESS;
 }
 
 static int unhide_process(pid_t pid)
 {
     pid_node_t *proc, *tmp_proc;
+
+    spin_lock(&list_lock);
     list_for_each_entry_safe (proc, tmp_proc, &hidden_proc, list_node) {
         list_del(&proc->list_node);
         kfree(proc);
     }
+    spin_unlock(&list_lock);
     return SUCCESS;
 }
 
@@ -166,12 +183,14 @@ static ssize_t device_read(struct file *filep,
     if (*offset)
         return 0;
 
+    spin_lock(&list_lock);
     list_for_each_entry_safe (proc, tmp_proc, &hidden_proc, list_node) {
         memset(message, 0, MAX_MESSAGE_SIZE);
         sprintf(message, OUTPUT_BUFFER_FORMAT, proc->id);
         copy_to_user(buffer + *offset, message, strlen(message));
         *offset += strlen(message);
     }
+    spin_unlock(&list_lock);
     return *offset;
 }
 
@@ -241,6 +260,8 @@ static int _hideproc_init(void)
                   DEVICE_NAME);
 
     init_hook();
+
+    spin_lock_init(&list_lock);
 
     return 0;
 }
